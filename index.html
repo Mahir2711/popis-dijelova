@@ -220,6 +220,19 @@
   }
   .btn-delete:hover{ text-decoration:underline; }
 
+  .qty-control{ display:inline-flex; align-items:center; gap:7px; }
+  .qty-control .qty-num{ min-width:22px; text-align:center; }
+  .btn-qty{
+    background:transparent; border:1px solid var(--rule); color:var(--text);
+    width:26px; height:26px; border-radius:3px; font-size:13px; line-height:1;
+    display:inline-flex; align-items:center; justify-content:center; padding:0; flex:0 0 auto;
+  }
+  .btn-qty:hover{ border-color:var(--accent); color:var(--accent); }
+  .btn-qty:disabled{ opacity:0.3; }
+  .btn-qty:disabled:hover{ border-color:var(--rule); color:var(--text); }
+  .chip.plus{ color:#bcd9bb; border-color:var(--success); }
+  .chip.minus{ color:#f0d9a9; border-color:var(--accent-dim); }
+
   /* search */
   #search-wrap{ margin-bottom:20px; }
   #search-input{
@@ -400,7 +413,7 @@
   // 1) OVDJE UPISUJEŠ SVOJU FIREBASE KONFIGURACIJU
   //    (Project settings -> Your apps -> Web app -> SDK setup snippet)
   // ====================================================================
- const firebaseConfig = {
+  const firebaseConfig = {
     apiKey: "AIzaSyCv7p5OpqXnCYaNDaSVU_GNiW_bvFV3rzM",
     authDomain: "sobica-e2b07.firebaseapp.com",
     projectId: "sobica-e2b07",
@@ -408,6 +421,7 @@
     messagingSenderId: "85183977066",
     appId: "1:85183977066:web:a5cc801e44eaa202d79c13"
   };
+
   // ====================================================================
   // 2) KORISNICI - korisničko ime / lozinka / uloga
   // ====================================================================
@@ -578,12 +592,19 @@
       return;
     }
     tbody.innerHTML = list.map(function(it){
+      const qty = Number(it.kolicina) || 0;
       return ''
         + '<tr>'
         + '<td>' + escapeHtml(it.naziv) + '</td>'
         + '<td class="mono">' + (it.sifra ? escapeHtml(it.sifra) : '—') + '</td>'
         + '<td>' + (it.lokacija ? escapeHtml(it.lokacija) : '—') + '</td>'
-        + '<td class="mono">' + (Number(it.kolicina) || 0) + '</td>'
+        + '<td class="mono">'
+        +   '<span class="qty-control">'
+        +     '<button class="btn-qty btn-minus" data-id="' + it.id + '" data-cat="' + key + '"' + (qty <= 0 ? ' disabled' : '') + '>▼</button>'
+        +     '<span class="qty-num">' + qty + '</span>'
+        +     '<button class="btn-qty btn-plus" data-id="' + it.id + '" data-cat="' + key + '">▲</button>'
+        +   '</span>'
+        + '</td>'
         + '<td><button class="btn-delete" data-id="' + it.id + '" data-cat="' + key + '">Obriši</button></td>'
         + '</tr>';
     }).join('');
@@ -598,9 +619,11 @@
     }
     tbody.innerHTML = logCache.map(function(l){
       const catLabel = (CATEGORIES.find(function(c){ return c.key === l.kategorija; }) || {}).label || l.kategorija || '—';
-      const actionChip = l.action === 'add'
-        ? '<span class="chip add">dodano</span>'
-        : '<span class="chip del">obrisano</span>';
+      const actionChip = l.action === 'add' ? '<span class="chip add">dodano</span>'
+        : l.action === 'delete' ? '<span class="chip del">obrisano</span>'
+        : l.action === 'plus' ? '<span class="chip plus">+1</span>'
+        : l.action === 'minus' ? '<span class="chip minus">-1</span>'
+        : '<span class="chip">' + escapeHtml(l.action || '—') + '</span>';
       return ''
         + '<tr>'
         + '<td class="mono">' + fmtTime(l.timestamp) + '</td>'
@@ -656,9 +679,33 @@
     });
   });
 
+  // ---------- +/- KOLIČINA ----------
+  async function adjustQty(cat, id, delta){
+    if (!db) { alert('Baza podataka nije povezana.'); return; }
+    const item = (itemsCache[cat] || []).find(function(it){ return it.id === id; });
+    if (!item) return;
+    const current = Number(item.kolicina) || 0;
+    const next = Math.max(0, current + delta);
+    if (next === current) return;
+    try {
+      await db.collection('items').doc(id).update({ kolicina: next });
+      await db.collection('log').add({
+        action: delta > 0 ? 'plus' : 'minus', user: currentUser, naziv: item.naziv, kategorija: cat,
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Greška pri izmjeni količine. Provjeri internet konekciju.');
+    }
+  }
+
   // ---------- DELETE (event delegation) ----------
   document.querySelectorAll('tbody').forEach(function(tbody){
     tbody.addEventListener('click', async function(e){
+      const plusBtn = e.target.closest('.btn-plus');
+      const minusBtn = e.target.closest('.btn-minus');
+      if (plusBtn) { adjustQty(plusBtn.dataset.cat, plusBtn.dataset.id, 1); return; }
+      if (minusBtn) { adjustQty(minusBtn.dataset.cat, minusBtn.dataset.id, -1); return; }
       const btn = e.target.closest('.btn-delete');
       if (!btn) return;
       const cat = btn.dataset.cat;
@@ -699,7 +746,7 @@
     CATEGORIES.forEach(function(c){
       (itemsCache[c.key] || []).forEach(function(it){
         if (it.naziv.toLowerCase().indexOf(q) !== -1 || (it.sifra && it.sifra.toLowerCase().indexOf(q) !== -1)){
-          results.push({ item: it, label: c.label });
+          results.push({ item: it, catKey: c.key, label: c.label });
         }
       });
     });
@@ -710,13 +757,20 @@
     }
     tbody.innerHTML = results.map(function(r){
       const it = r.item;
+      const qty = Number(it.kolicina) || 0;
       return ''
         + '<tr>'
         + '<td>' + escapeHtml(it.naziv) + '</td>'
         + '<td><span class="chip">' + escapeHtml(r.label) + '</span></td>'
         + '<td class="mono">' + (it.sifra ? escapeHtml(it.sifra) : '—') + '</td>'
         + '<td>' + (it.lokacija ? escapeHtml(it.lokacija) : '—') + '</td>'
-        + '<td class="mono">' + (Number(it.kolicina) || 0) + '</td>'
+        + '<td class="mono">'
+        +   '<span class="qty-control">'
+        +     '<button class="btn-qty btn-minus" data-id="' + it.id + '" data-cat="' + r.catKey + '"' + (qty <= 0 ? ' disabled' : '') + '>▼</button>'
+        +     '<span class="qty-num">' + qty + '</span>'
+        +     '<button class="btn-qty btn-plus" data-id="' + it.id + '" data-cat="' + r.catKey + '">▲</button>'
+        +   '</span>'
+        + '</td>'
         + '</tr>';
     }).join('');
   }
