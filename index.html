@@ -299,7 +299,9 @@
     <button class="tab-btn" data-tab="specijalni_alati">Specijalni alati</button>
     <button class="tab-btn" data-tab="sprejevi">Sprejevi</button>
     <button class="tab-btn" data-tab="mirisi_ventilacija">Mirisi / Ventilacija</button>
+    <button class="tab-btn" data-tab="sve">Sve</button>
     <button class="tab-btn" data-tab="pretraga">Pretraga</button>
+    <button class="tab-btn" data-tab="nabavka">Nabavka</button>
     <button class="tab-btn admin-only" data-tab="aktivnost">Aktivnost (admin)</button>
   </nav>
 
@@ -375,6 +377,27 @@
       </div>
     </section>
 
+    <!-- SVE -->
+    <section class="tab-panel" id="panel-sve">
+      <div class="panel-heading">
+        <h2>Sve</h2>
+        <span class="count" id="count-sve"></span>
+      </div>
+      <form class="add-form" data-cat="sve">
+        <div class="f"><label>Naziv dijela</label><input type="text" name="naziv" required placeholder="npr. Vijci M8"></div>
+        <div class="f"><label>Šifra / kod</label><input type="text" name="sifra" placeholder="npr. SV-001"></div>
+        <div class="f"><label>Lokacija</label><input type="text" name="lokacija" placeholder="npr. Fioka 3"></div>
+        <div class="f qty"><label>Broj</label><input type="number" name="kolicina" min="0" step="1" value="1"></div>
+        <button type="submit" class="btn btn-primary">Dodaj</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Naziv</th><th class="mono">Šifra</th><th>Lokacija</th><th class="mono">Broj</th><th></th></tr></thead>
+          <tbody id="tbody-sve"></tbody>
+        </table>
+      </div>
+    </section>
+
     <!-- PRETRAGA -->
     <section class="tab-panel" id="panel-pretraga">
       <div class="panel-heading"><h2>Pretraga dijelova</h2></div>
@@ -386,6 +409,22 @@
         <table>
           <thead><tr><th>Naziv</th><th>Kategorija</th><th class="mono">Šifra</th><th>Lokacija</th><th class="mono">Broj</th></tr></thead>
           <tbody id="tbody-search"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- NABAVKA -->
+    <section class="tab-panel" id="panel-nabavka">
+      <div class="panel-heading"><h2>Lista za nabavku</h2></div>
+      <form class="add-form" id="nabavka-form">
+        <div class="f"><label>Naziv stvari</label><input type="text" name="naziv" required placeholder="npr. Rukavice"></div>
+        <div class="f qty"><label>Količina</label><input type="number" name="kolicina" min="1" step="1" value="1"></div>
+        <button type="submit" class="btn btn-primary">Dodaj na listu</button>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Naziv</th><th class="mono">Količina</th><th></th></tr></thead>
+          <tbody id="tbody-nabavka"></tbody>
         </table>
       </div>
     </section>
@@ -435,7 +474,8 @@
   const CATEGORIES = [
     { key: 'specijalni_alati', label: 'Specijalni alati' },
     { key: 'sprejevi', label: 'Sprejevi' },
-    { key: 'mirisi_ventilacija', label: 'Mirisi / Ventilacija' }
+    { key: 'mirisi_ventilacija', label: 'Mirisi / Ventilacija' },
+    { key: 'sve', label: 'Sve' }
   ];
 
   const CONFIGURED = firebaseConfig.apiKey.indexOf('OVDJE_') === -1;
@@ -443,10 +483,12 @@
   let currentUser = null;
   let currentRole = null;
 
-  let itemsCache = { specijalni_alati: [], sprejevi: [], mirisi_ventilacija: [] };
+  let itemsCache = { specijalni_alati: [], sprejevi: [], mirisi_ventilacija: [], sve: [] };
   let logCache = [];
+  let nabavkaCache = [];
   let unsubItems = null;
   let unsubLog = null;
+  let unsubNabavka = null;
 
   if (CONFIGURED) {
     try {
@@ -494,6 +536,7 @@
   document.getElementById('logout-btn').addEventListener('click', function(){
     if (unsubItems) { unsubItems(); unsubItems = null; }
     if (unsubLog) { unsubLog(); unsubLog = null; }
+    if (unsubNabavka) { unsubNabavka(); unsubNabavka = null; }
     currentUser = null;
     currentRole = null;
     appEl.style.display = 'none';
@@ -508,7 +551,7 @@
     if (!db) { renderAll(); return; }
 
     unsubItems = db.collection('items').onSnapshot(function(snapshot){
-      const fresh = { specijalni_alati: [], sprejevi: [], mirisi_ventilacija: [] };
+      const fresh = { specijalni_alati: [], sprejevi: [], mirisi_ventilacija: [], sve: [] };
       snapshot.forEach(function(doc){
         const d = doc.data();
         if (fresh[d.kategorija]) fresh[d.kategorija].push(Object.assign({ id: doc.id }, d));
@@ -530,6 +573,13 @@
         console.error('Greška pri čitanju log-a:', err);
       });
     }
+
+    unsubNabavka = db.collection('nabavka').onSnapshot(function(snapshot){
+      nabavkaCache = snapshot.docs.map(function(d){ return Object.assign({ id: d.id }, d.data()); });
+      renderNabavka();
+    }, function(err){
+      console.error('Greška pri čitanju liste za nabavku:', err);
+    });
   }
 
   // ---------- TABS ----------
@@ -552,6 +602,7 @@
     CATEGORIES.forEach(function(c){ renderCategory(c.key); });
     renderSearch();
     renderLog();
+    renderNabavka();
   }
 
   // ---------- RENDER ----------
@@ -642,8 +693,30 @@
     return 'upravo sada';
   }
 
+  function renderNabavka(){
+    const tbody = document.getElementById('tbody-nabavka');
+    if (!tbody) return;
+    const list = nabavkaCache.slice().sort(function(a, b){
+      return (a.naziv || '').localeCompare(b.naziv || '', 'hr');
+    });
+    if (list.length === 0){
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="3">'
+        + (db ? 'Lista za nabavku je prazna.' : 'Baza podataka nije povezana.')
+        + '</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(function(it){
+      return ''
+        + '<tr>'
+        + '<td>' + escapeHtml(it.naziv) + '</td>'
+        + '<td class="mono">' + (Number(it.kolicina) || 0) + '</td>'
+        + '<td><button class="btn-delete btn-delete-nabavka" data-id="' + it.id + '">Obriši</button></td>'
+        + '</tr>';
+    }).join('');
+  }
+
   // ---------- ADD FORM ----------
-  document.querySelectorAll('.add-form').forEach(function(form){
+  document.querySelectorAll('.add-form[data-cat]').forEach(function(form){
     form.addEventListener('submit', async function(e){
       e.preventDefault();
       if (!db) { alert('Baza podataka nije povezana. Provjeri Firebase konfiguraciju.'); return; }
@@ -698,6 +771,47 @@
       alert('Greška pri izmjeni količine. Provjeri internet konekciju.');
     }
   }
+
+  // ---------- NABAVKA: dodavanje ----------
+  document.getElementById('nabavka-form').addEventListener('submit', async function(e){
+    e.preventDefault();
+    if (!db) { alert('Baza podataka nije povezana. Provjeri Firebase konfiguraciju.'); return; }
+    const form = e.target;
+    const naziv = form.naziv.value.trim();
+    if (!naziv) return;
+    const kolicina = parseInt(form.kolicina.value, 10);
+    try {
+      await db.collection('nabavka').add({
+        naziv: naziv,
+        kolicina: isNaN(kolicina) ? 1 : kolicina,
+        createdBy: currentUser,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Greška pri spremanju. Provjeri internet konekciju.');
+      return;
+    }
+    form.reset();
+    form.kolicina.value = '1';
+    form.naziv.focus();
+  });
+
+  // ---------- NABAVKA: brisanje ----------
+  document.getElementById('tbody-nabavka').addEventListener('click', async function(e){
+    const btn = e.target.closest('.btn-delete-nabavka');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const item = nabavkaCache.find(function(it){ return it.id === id; });
+    if (!item) return;
+    if (!confirm('Skloniti "' + item.naziv + '" sa liste za nabavku?')) return;
+    try {
+      await db.collection('nabavka').doc(id).delete();
+    } catch (err) {
+      console.error(err);
+      alert('Greška pri brisanju. Provjeri internet konekciju.');
+    }
+  });
 
   // ---------- DELETE (event delegation) ----------
   document.querySelectorAll('tbody').forEach(function(tbody){
