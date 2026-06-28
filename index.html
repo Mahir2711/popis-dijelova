@@ -233,6 +233,41 @@
   .chip.plus{ color:#bcd9bb; border-color:var(--success); }
   .chip.minus{ color:#f0d9a9; border-color:var(--accent-dim); }
 
+  /* animacije: novi/uklonjeni redovi, promjena količine */
+  tbody tr{ transition: background 0.15s ease; }
+  @keyframes rowIn{
+    from{ opacity:0; transform:translateX(-8px); background:rgba(91,140,90,0.22); }
+    60%{ background:rgba(91,140,90,0.16); }
+    to{ opacity:1; transform:translateX(0); background:transparent; }
+  }
+  tr.row-new{ animation: rowIn 0.6s ease; }
+  @keyframes rowOut{
+    from{ opacity:1; transform:translateX(0) scale(1); }
+    to{ opacity:0; transform:translateX(14px) scale(0.97); }
+  }
+  tr.row-exit{ animation: rowOut 0.22s ease forwards; }
+  @keyframes pulsePlus{
+    0%{ transform:scale(1); color:var(--text); }
+    45%{ transform:scale(1.45); color:var(--success); }
+    100%{ transform:scale(1); color:var(--text); }
+  }
+  @keyframes pulseMinus{
+    0%{ transform:scale(1); color:var(--text); }
+    45%{ transform:scale(1.45); color:var(--danger); }
+    100%{ transform:scale(1); color:var(--text); }
+  }
+  .qty-num{ display:inline-block; }
+  .qty-num.pulse-plus{ animation: pulsePlus 0.45s ease; }
+  .qty-num.pulse-minus{ animation: pulseMinus 0.45s ease; }
+  .btn-qty:active{ transform:scale(0.88); }
+
+  /* malo vizuelnog sjaja */
+  .tab-btn.active{ box-shadow: 0 0 0 1px var(--accent), 0 3px 12px rgba(242,183,5,0.22); }
+  .ov-card{ transition: transform 0.15s ease, box-shadow 0.15s ease; }
+  .ov-card:hover{ box-shadow: 0 8px 20px rgba(0,0,0,0.35); }
+  .btn-primary{ position:relative; overflow:hidden; }
+  .btn-primary:active{ transform:translateY(1px) scale(0.98); }
+
   /* search */
   #search-wrap{ margin-bottom:20px; }
   #search-input{
@@ -486,6 +521,8 @@
   let itemsCache = { specijalni_alati: [], sprejevi: [], mirisi_ventilacija: [], sve: [] };
   let logCache = [];
   let nabavkaCache = [];
+  let prevIds = {};
+  let prevNabavkaIds = null;
   let unsubItems = null;
   let unsubLog = null;
   let unsubNabavka = null;
@@ -635,17 +672,20 @@
     const list = (itemsCache[key] || []).slice().sort(function(a, b){
       return a.naziv.localeCompare(b.naziv, 'hr');
     });
+    const prevSet = prevIds[key];
     if (countEl) countEl.textContent = list.length + (list.length === 1 ? ' dio' : ' dijela');
     if (list.length === 0){
       tbody.innerHTML = '<tr class="empty-row"><td colspan="5">'
         + (db ? 'Nema unesenih dijelova u ovoj kategoriji. Dodaj prvi dio iznad.' : 'Baza podataka nije povezana.')
         + '</td></tr>';
+      prevIds[key] = new Set();
       return;
     }
     tbody.innerHTML = list.map(function(it){
       const qty = Number(it.kolicina) || 0;
+      const isNew = prevSet && !prevSet.has(it.id);
       return ''
-        + '<tr>'
+        + '<tr' + (isNew ? ' class="row-new"' : '') + '>'
         + '<td>' + escapeHtml(it.naziv) + '</td>'
         + '<td class="mono">' + (it.sifra ? escapeHtml(it.sifra) : '—') + '</td>'
         + '<td>' + (it.lokacija ? escapeHtml(it.lokacija) : '—') + '</td>'
@@ -659,6 +699,7 @@
         + '<td><button class="btn-delete" data-id="' + it.id + '" data-cat="' + key + '">Obriši</button></td>'
         + '</tr>';
     }).join('');
+    prevIds[key] = new Set(list.map(function(it){ return it.id; }));
   }
 
   function renderLog(){
@@ -703,16 +744,26 @@
       tbody.innerHTML = '<tr class="empty-row"><td colspan="3">'
         + (db ? 'Lista za nabavku je prazna.' : 'Baza podataka nije povezana.')
         + '</td></tr>';
+      prevNabavkaIds = new Set();
       return;
     }
     tbody.innerHTML = list.map(function(it){
+      const qty = Number(it.kolicina) || 0;
+      const isNew = prevNabavkaIds && !prevNabavkaIds.has(it.id);
       return ''
-        + '<tr>'
+        + '<tr' + (isNew ? ' class="row-new"' : '') + '>'
         + '<td>' + escapeHtml(it.naziv) + '</td>'
-        + '<td class="mono">' + (Number(it.kolicina) || 0) + '</td>'
+        + '<td class="mono">'
+        +   '<span class="qty-control">'
+        +     '<button class="btn-qty btn-nabavka-minus" data-id="' + it.id + '"' + (qty <= 1 ? ' disabled' : '') + '>▼</button>'
+        +     '<span class="qty-num">' + qty + '</span>'
+        +     '<button class="btn-qty btn-nabavka-plus" data-id="' + it.id + '">▲</button>'
+        +   '</span>'
+        + '</td>'
         + '<td><button class="btn-delete btn-delete-nabavka" data-id="' + it.id + '">Obriši</button></td>'
         + '</tr>';
     }).join('');
+    prevNabavkaIds = new Set(list.map(function(it){ return it.id; }));
   }
 
   // ---------- ADD FORM ----------
@@ -751,6 +802,25 @@
       form.naziv.focus();
     });
   });
+
+  // ---------- animacija: pulsiranje broja, izlazak reda ----------
+  function pulseQtyNum(btn, kind){
+    const num = btn.closest('.qty-control').querySelector('.qty-num');
+    if (!num) return;
+    num.classList.remove('pulse-plus', 'pulse-minus');
+    // force reflow da animacija radi i kod brzih klikova
+    void num.offsetWidth;
+    num.classList.add(kind === 'plus' ? 'pulse-plus' : 'pulse-minus');
+  }
+
+  function animateRowOut(btn){
+    return new Promise(function(resolve){
+      const tr = btn.closest('tr');
+      if (!tr){ resolve(); return; }
+      tr.classList.add('row-exit');
+      setTimeout(resolve, 200);
+    });
+  }
 
   // ---------- +/- KOLIČINA ----------
   async function adjustQty(cat, id, delta){
@@ -797,14 +867,35 @@
     form.naziv.focus();
   });
 
-  // ---------- NABAVKA: brisanje ----------
+  // ---------- NABAVKA: +/- količina ----------
+  async function adjustNabavkaQty(id, delta){
+    if (!db) { alert('Baza podataka nije povezana.'); return; }
+    const item = nabavkaCache.find(function(it){ return it.id === id; });
+    if (!item) return;
+    const current = Number(item.kolicina) || 0;
+    const next = Math.max(1, current + delta);
+    if (next === current) return;
+    try {
+      await db.collection('nabavka').doc(id).update({ kolicina: next });
+    } catch (err) {
+      console.error(err);
+      alert('Greška pri izmjeni količine. Provjeri internet konekciju.');
+    }
+  }
+
+  // ---------- NABAVKA: brisanje / +/- (event delegation) ----------
   document.getElementById('tbody-nabavka').addEventListener('click', async function(e){
+    const plusBtn = e.target.closest('.btn-nabavka-plus');
+    const minusBtn = e.target.closest('.btn-nabavka-minus');
+    if (plusBtn) { pulseQtyNum(plusBtn, 'plus'); adjustNabavkaQty(plusBtn.dataset.id, 1); return; }
+    if (minusBtn) { pulseQtyNum(minusBtn, 'minus'); adjustNabavkaQty(minusBtn.dataset.id, -1); return; }
     const btn = e.target.closest('.btn-delete-nabavka');
     if (!btn) return;
     const id = btn.dataset.id;
     const item = nabavkaCache.find(function(it){ return it.id === id; });
     if (!item) return;
     if (!confirm('Skloniti "' + item.naziv + '" sa liste za nabavku?')) return;
+    await animateRowOut(btn);
     try {
       await db.collection('nabavka').doc(id).delete();
     } catch (err) {
@@ -818,15 +909,16 @@
     tbody.addEventListener('click', async function(e){
       const plusBtn = e.target.closest('.btn-plus');
       const minusBtn = e.target.closest('.btn-minus');
-      if (plusBtn) { adjustQty(plusBtn.dataset.cat, plusBtn.dataset.id, 1); return; }
-      if (minusBtn) { adjustQty(minusBtn.dataset.cat, minusBtn.dataset.id, -1); return; }
+      if (plusBtn) { pulseQtyNum(plusBtn, 'plus'); adjustQty(plusBtn.dataset.cat, plusBtn.dataset.id, 1); return; }
+      if (minusBtn) { pulseQtyNum(minusBtn, 'minus'); adjustQty(minusBtn.dataset.cat, minusBtn.dataset.id, -1); return; }
       const btn = e.target.closest('.btn-delete');
-      if (!btn) return;
+      if (!btn || btn.classList.contains('btn-delete-nabavka')) return;
       const cat = btn.dataset.cat;
       const id = btn.dataset.id;
       const item = (itemsCache[cat] || []).find(function(it){ return it.id === id; });
       if (!item) return;
       if (!confirm('Obrisati "' + item.naziv + '" sa stanja?')) return;
+      await animateRowOut(btn);
       try {
         await db.collection('items').doc(id).delete();
         await db.collection('log').add({
